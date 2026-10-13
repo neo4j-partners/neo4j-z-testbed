@@ -1,0 +1,66 @@
+# ---------- Large binaries / installers ----------
+neo4j-enterprise-2026.09.0-unix.tar.gz
+neo4j-enterprise_2026.09.0_all.deb
+*.tar.gz
+*.tgz
+*.zip
+*.deb
+*.rpm
+*.dump
+*.backup
+
+# ---------- Environment variables / secrets ----------
+.env
+.env.*
+!.env.example
+*.env
+.envrc
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# ---------- uv / virtual environments ----------
+.venv/
+venv/
+env/
+.python-version.local
+
+# ---------- macOS ----------
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# ---------- Windows ----------
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# ---------- IntelliJ / JetBrains ----------
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# ---------- VS Code ----------
+.vscode/
+*.code-workspace
+.history/
