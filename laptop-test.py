@@ -257,17 +257,31 @@ def show_connection(driver: Driver) -> None:
 
 def show_topology(driver: Driver) -> None:
     records, _, _ = driver.execute_query(
-        "SHOW DATABASE $db YIELD address, role, writer, currentStatus",
+        "SHOW DATABASE $db "
+        "YIELD serverID, address, role, writer, currentStatus, statusMessage",
         {"db": DATABASE},
         database_="system",
     )
     print(f"  Database '{DATABASE}':")
+    online = 0
     for rec in records:
-        writer = "  <- writer" if rec["writer"] else ""
+        # A member that is down has no address and may have no role.
+        address = rec["address"] or "unavailable"
+        role = rec["role"] or "-"
+        if rec["currentStatus"] == "online":
+            online += 1
+            marker = "  <- writer" if rec["writer"] else ""
+        else:
+            marker = "  <- DOWN"
         print(
-            f"    {rec['address']:<18} role={rec['role']:<10} "
-            f"status={rec['currentStatus']}{writer}"
+            f"    {address:<18} role={role:<10} "
+            f"status={rec['currentStatus']}{marker}"
         )
+        if rec["currentStatus"] != "online":
+            print(f"      server     {rec['serverID']}")
+            print(f"      message    {rec['statusMessage'] or '-'}")
+    print()
+    kv("Members online", f"{online} of {len(records)}")
 
 
 def write_rows(session: Session, rows: list[dict], batch_size: int) -> tuple:
