@@ -1,18 +1,18 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["neo4j>=5.28"]
+# dependencies = ["neo4j>=5.28", "python-dotenv>=1.0"]
 # ///
 """Write and read test data in Neo4j from your laptop through an SSH tunnel.
 
 Run it on your laptop, not on the server:
 
-    export SERVER_IP=<server-ip>
-    export LOCAL_BOLT_PORT=17687         # optional, this is the default
-    export NEO4J_PW='<your-password>'    # prompts if not set
-    export SSH_PW='<ssh-password>'       # optional, ssh prompts if not set
+    cp -n .env.example .env              # then set the values in .env
     uv run laptop-test.py                # cluster, neo4j://localhost:17687
     uv run laptop-test.py --target single
+
+The script loads .env from its own directory. Variables already set in your
+shell take precedence over the file.
 
 The script opens the SSH tunnel itself and closes it when it finishes.
 LOCAL_BOLT_PORT is the laptop end of the tunnel for the server's port 7687.
@@ -35,9 +35,11 @@ from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
+from dotenv import load_dotenv
 from neo4j import Address, Driver, GraphDatabase, Session
 from neo4j.exceptions import AuthError, Neo4jError, ServiceUnavailable
 
+ENV_FILE = Path(__file__).resolve().with_name(".env")
 BOLT_PORTS = {"single": [7687], "cluster": [7687, 7697, 7707]}
 DEFAULT_LOCAL_BOLT_PORT = 17687
 URI_SCHEME = {"single": "bolt", "cluster": "neo4j"}
@@ -482,9 +484,10 @@ def run_test(
 
 def main() -> int:
     args = parse_args()
+    load_dotenv(ENV_FILE)
     server = os.environ.get("SERVER_IP")
     if not server:
-        print("Set SERVER_IP first, for example: export SERVER_IP=<server-ip>")
+        print(f"Set SERVER_IP in {ENV_FILE}. See .env.example.")
         return 1
 
     try:

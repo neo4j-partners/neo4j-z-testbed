@@ -1,49 +1,39 @@
 # Neo4j Enterprise on IBM Z: testing and validation
 
-This repository tests Neo4j Enterprise Edition 2026.09.0 on IBM Z. It checks two setups: a single node and a three-member cluster.
+This repository tests whether Neo4j Enterprise Edition 2026.09.0 installs and runs on IBM Z. It holds the install scripts, the test tools, and the results, so you can repeat each test on your own machine.
 
-Neo4j documents support only for x86_64 and ARM64 CPUs. IBM Z uses the `s390x` architecture, so it is outside that list. These tests show whether Neo4j installs and runs on it anyway.
+Neo4j documents support only for x86_64 and ARM64 CPUs. IBM Z uses the `s390x` architecture, so it is outside that list. These tests show what works in practice. They are not a statement of support from Neo4j.
 
-## Cluster test results
+The testing covers these deployments:
 
-The three-member cluster installed on IBM Z and passed every test. The full output of the install and the laptop test is in [sample-output.md](sample-output.md).
+- **VM single node:** One standalone Neo4j instance runs on an Ubuntu VM. This is the quickest way to check Java, the tarball, licensing, and networking.
+- **VM cluster:** Three Neo4j members run on one Ubuntu VM. This shows cluster formation, replication, and failover.
+- **OpenShift:** Testing on IBM Z OpenShift with the Neo4j Kubernetes operator is planned next.
 
-### Test machine
+## Contents
 
-- **Architecture:** The machine is IBM Z and reports `s390x`.
-- **Operating system:** The machine runs Ubuntu 24.04.
-- **Memory:** The machine has 4 GB of RAM. Each member ran with a 512 MB heap and a 128 MB page cache to fit in that space.
-- **Disk:** The `/opt` directory had 94 GB free on an ext4 filesystem.
-- **Java:** Java 21 was already installed and set as the default.
-- **Network:** All members listened on `127.0.0.1` only.
-- **License:** The test used the 30-day evaluation license.
+- [Test results](#test-results)
+- [What is in this repository](#what-is-in-this-repository)
+- [VM deployment](#vm-deployment)
+  - [Requirements](#requirements)
+  - [Prepare the server](#prepare-the-server)
+  - [Single node](#single-node)
+  - [Three-member cluster](#three-member-cluster)
+  - [Reference](#reference)
+- [OpenShift deployment (planned)](#openshift-deployment-planned)
+- [References](#references)
 
-### What passed
+## Test results
 
-- **Cluster formation:** All three servers reached the `Enabled` and `Available` state.
-- **Databases:** The `neo4j` and `system` databases came online on all three members. Each member hosted both databases as a primary.
-- **Writer election:** The cluster picked one writer for each database. Member 2 led `neo4j` and member 3 led `system`.
-- **Replication:** The test wrote a node through member 1. Members 2 and 3 both returned that node when read directly.
-- **Failover:** The test stopped member 2. Writes still worked with two of three members running. After restart, member 2 rejoined and returned the node written while it was down.
+The VM tests passed on IBM Z, including a laptop test against the cluster. The test machine, what passed, and the warnings seen are in [IBMZ-VM-TEST-RESULTS.md](vm/IBMZ-VM-TEST-RESULTS.md).
 
-### Warnings seen
+One issue is open. A cluster member crashed in the Java VM after a later install. The [crash details](vm/IBMZ-VM-TEST-RESULTS.md#java-vm-crash-on-member-3) are in the same file.
 
-- **Unsupported architecture:** The script warned that `s390x` is outside Neo4j's documented support. The install continued and worked.
-- **Low memory:** The script warned that 4 GB is below the 8 GB it recommends for three members. The smaller memory settings were enough for these tests. Larger data sets need more memory.
-- **Java incubator module:** Each `neo4j-admin` command printed `WARNING: Using incubator modules: jdk.incubator.vector`. Java prints this because Neo4j loads the incubating Java Vector API. The warning did not affect any test.
-
-## Laptop test results
-
-`laptop-test.py` ran from a laptop against the cluster and passed. It reached the cluster through an SSH tunnel.
-
-- **Connection:** The Python driver connected to Neo4j 2026.09.0 Enterprise over Bolt protocol 6.1.
-- **Cluster health:** All three servers were `Enabled` and `Available`. The `neo4j` database was online on all three members.
-- **Writer:** Member 3 was the writer for `neo4j` during this run. The writer moved off member 2 when the failover test stopped it.
-- **Write:** The test wrote 100 nodes in 4 batches of 25. The driver sent every batch to the writer. The writes took 2,145 ms in total, about 47 rows per second.
-- **Read:** The test read all 100 nodes back in one transaction. The driver sent the read to member 2, which is not the writer. The read took 1,888 ms.
-- **Verify:** All 100 rows matched what was written, field by field. No rows were different or missing.
-- **Clean up:** The test deleted all 100 nodes.
-- **Timing:** These times include the round trip through the SSH tunnel. They do not measure Neo4j performance on IBM Z.
+| Deployment | Setup | Status |
+| --- | --- | --- |
+| VM | Single node | [Passed](vm/IBMZ-VM-TEST-RESULTS.md#single-node-test-results) |
+| VM | Three-member cluster | [Passed](vm/IBMZ-VM-TEST-RESULTS.md#cluster-test-results) |
+| OpenShift | Neo4j Kubernetes operator | Planned |
 
 ## What is in this repository
 
@@ -51,15 +41,20 @@ Two interactive scripts install Neo4j Enterprise Edition 2026.09.0 on a single U
 
 | File | Purpose |
 | --- | --- |
-| `install-single.sh` | Installs one standalone node. Run it first to check Java, the tarball, licensing, and networking. |
-| `install-cluster.sh` | Installs a three-member cluster on one machine. It can also clean up earlier installs. |
-| `cluster.md` | The same cluster setup as manual steps, with one command per code block. |
-| `laptop-test.py` | Runs from your laptop. Writes test data through an SSH tunnel, reads it back, and checks it. |
-| `sample-output.md` | Full output from the cluster install and the laptop test on IBM Z, with addresses and the password redacted. |
+| `vm/install-single.sh` | Installs one standalone node. Run it first to check Java, the tarball, licensing, and networking. |
+| `vm/install-cluster.sh` | Installs a three-member cluster on one machine. It can also clean up earlier installs. |
+| `vm/cluster.md` | The same cluster setup as manual steps, with one command per code block. |
+| `vm/laptop-test.py` | Runs from your laptop. Writes test data through an SSH tunnel, reads it back, and checks it. |
+| `vm/.env.example` | Sample settings for `laptop-test.py`. Copy it to `vm/.env`. |
+| `vm/IBMZ-VM-TEST-RESULTS.md` | Results of the VM tests on IBM Z. |
+| `vm/crash-reports/` | Java crash report and compiler replay data from the member 3 crash. |
+| `vm/sample-output.md` | Full output from the cluster install and the laptop test on IBM Z, with addresses and the password redacted. |
 
 Both scripts install from the Neo4j tarball, not the Debian package. The Debian package supports only one instance per machine, so it cannot host three cluster members.
 
-## Requirements
+## VM deployment
+
+### Requirements
 
 - Ubuntu Server 22.04 or 24.04. Ubuntu 22.04 is deprecated as of Neo4j 2026.05.
 - Root access or a user with `sudo`.
@@ -71,9 +66,11 @@ Both scripts install from the Neo4j tarball, not the Debian package. The Debian 
 
 Java 21 is installed by the scripts if no supported version is present.
 
-## Quick start
+### Prepare the server
 
-On your laptop, set the server address. The commands below that run on your laptop use it.
+Run these commands on your laptop from the root of this repository, with the tarball saved there.
+
+Set the server address. The commands below that run on your laptop use it.
 
 ```bash
 export SERVER_IP=<server-ip>
@@ -82,11 +79,7 @@ export SERVER_IP=<server-ip>
 Copy the scripts and the tarball to the same directory on the server.
 
 ```bash
-scp install-single.sh install-cluster.sh neo4j-enterprise-2026.09.0-unix.tar.gz ubuntu@$SERVER_IP:~/
-```
-
-```bash
-scp install-single.sh install-cluster.sh ubuntu@$SERVER_IP:~/
+scp vm/install-single.sh vm/install-cluster.sh neo4j-enterprise-2026.09.0-unix.tar.gz ubuntu@$SERVER_IP:~/
 ```
 
 The scripts look for the tarball in their own directory. To keep it somewhere else, set `TARBALL_PATH` when you run them.
@@ -97,23 +90,53 @@ Connect to the server.
 ssh ubuntu@$SERVER_IP
 ```
 
-Install and check the single node first.
+Each script re-runs itself with `sudo` if you are not root. It explains every step and waits for Enter before running it.
+
+### Single node
+
+#### Set up the single node
+
+Run this on the server to install and check the single node.
 
 ```bash
 ./install-single.sh
 ```
 
-Then build the cluster. The script offers to remove the single node before it starts.
+#### Connect to the single node from your laptop
+
+The scripts listen on `127.0.0.1` by default, so no port is open to the network. Use an SSH tunnel. Run this on your laptop.
 
 ```bash
-./install-cluster.sh
+ssh -L 7474:localhost:7474 -L 7687:localhost:7687 ubuntu@$SERVER_IP
 ```
 
-Each script re-runs itself with `sudo` if you are not root. It explains every step and waits for Enter before running it.
+Open `http://localhost:7474` in a browser. Connect with `bolt://localhost:7687`. Log in as `neo4j` with the password you chose.
 
-## What each script does
+If you listen on `0.0.0.0`, read the [security notes](#security-notes) first.
 
-### install-single.sh
+#### Test the single node from your laptop
+
+`laptop-test.py` writes test data to Neo4j and reads it back from your laptop. It opens its own SSH tunnel and closes it when it finishes. Run it on your laptop from the root of this repository, not on the server. It needs [uv](https://docs.astral.sh/uv/), which installs the Neo4j Python driver on the first run.
+
+Connect once with plain `ssh` first so the server's host key is saved.
+
+Copy the sample settings file. The `-n` flag keeps any `vm/.env` you already have.
+
+```bash
+cp -n vm/.env.example vm/.env
+```
+
+Set `SERVER_IP` and `NEO4J_PW` in `vm/.env`. Git ignores this file.
+
+Run the test.
+
+```bash
+uv run vm/laptop-test.py --target single
+```
+
+The [laptop test details](#laptop-test-details) cover the optional settings, the steps, and the options.
+
+#### What install-single.sh does
 
 1. Checks the OS, architecture, memory, disk, filesystem, and that the ports are free.
 2. Asks for the listen address and the license type.
@@ -123,7 +146,61 @@ Each script re-runs itself with `sudo` if you are not root. It explains every st
 6. Creates the `neo4j-single` systemd service and starts it.
 7. Shows the version and edition, lists the databases, and runs a write and read test.
 
-### install-cluster.sh
+### Three-member cluster
+
+#### Remove the single node
+
+The single node and cluster member 1 use the same default ports. Remove the single node before you build the cluster. The `install` action also offers to do this. The [cleanup details](#what-cleanup-removes) list what it removes.
+
+```bash
+./install-cluster.sh cleanup
+```
+
+#### Set up the cluster
+
+Run this on the server to build the cluster.
+
+```bash
+./install-cluster.sh
+```
+
+To run each step by hand instead, follow [cluster.md](vm/cluster.md).
+
+#### Connect to the cluster from your laptop
+
+The scripts listen on `127.0.0.1` by default, so no port is open to the network. Use an SSH tunnel. Run this on your laptop. It forwards the Bolt ports of all three members.
+
+```bash
+ssh -L 7474:localhost:7474 -L 7687:localhost:7687 -L 7697:localhost:7697 -L 7707:localhost:7707 ubuntu@$SERVER_IP
+```
+
+Open `http://localhost:7474` in a browser. Connect with `neo4j://localhost:7687`. Log in as `neo4j` with the password you chose.
+
+If you listen on `0.0.0.0`, read the [security notes](#security-notes) first.
+
+#### Test the cluster from your laptop
+
+`laptop-test.py` writes test data to Neo4j and reads it back from your laptop. It opens its own SSH tunnel and closes it when it finishes. Run it on your laptop from the root of this repository, not on the server. It needs [uv](https://docs.astral.sh/uv/), which installs the Neo4j Python driver on the first run.
+
+Connect once with plain `ssh` first so the server's host key is saved.
+
+Copy the sample settings file. The `-n` flag keeps any `vm/.env` you already have.
+
+```bash
+cp -n vm/.env.example vm/.env
+```
+
+Set `SERVER_IP` and `NEO4J_PW` in `vm/.env`. Git ignores this file.
+
+Run the test.
+
+```bash
+uv run vm/laptop-test.py
+```
+
+The [laptop test details](#laptop-test-details) cover the optional settings, the steps, and the options.
+
+#### What install-cluster.sh does
 
 1. Offers to clean up earlier installs.
 2. Runs the same checks, settings prompts, Java, user, and unpack steps as the single node script.
@@ -133,7 +210,9 @@ Each script re-runs itself with `sudo` if you are not root. It explains every st
 6. Waits until `SHOW SERVERS` reports three available members.
 7. Runs a replication test and an optional failover test.
 
-## Commands
+### Reference
+
+#### Commands
 
 Both scripts take an action and the `-y` flag. The default action is `install`.
 
@@ -155,15 +234,9 @@ Both scripts take an action and the `-y` flag. The default action is `install`.
 
 The `-y` flag skips the Enter pauses and takes the default answer to each question. Pair it with `NEO4J_PW` for an unattended run.
 
-## Clean up before building the cluster
+#### What cleanup removes
 
-The single node and cluster member 1 use the same default ports. Remove the single node before you build the cluster.
-
-```bash
-./install-cluster.sh cleanup
-```
-
-The `install` action also runs this check first. It lists what it finds and offers to remove it.
+The `install` action runs the same check as `cleanup` first. It lists what it finds and offers to remove it.
 
 - It defaults to removing the install when it finds the single node or an apt package, because those block the cluster ports.
 - It defaults to keeping old cluster members, because re-running `install` reuses them.
@@ -183,7 +256,7 @@ Cleanup asks before it removes these, and the default answer is no:
 
 With `-y`, these optional items are kept.
 
-## Settings
+#### Settings
 
 Set these environment variables before the command to skip a prompt or change a default.
 
@@ -205,7 +278,7 @@ For example, this runs an unattended cluster install.
 NEO4J_PW='<your-password>' NEO4J_LICENSE=eval LISTEN_ADDRESS=127.0.0.1 ./install-cluster.sh -y
 ```
 
-## Layout and ports
+#### Layout and ports
 
 | Instance | Directory | Service | Bolt | HTTP | HTTPS | Cluster | Raft | Routing | Backup |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -216,65 +289,20 @@ NEO4J_PW='<your-password>' NEO4J_LICENSE=eval LISTEN_ADDRESS=127.0.0.1 ./install
 
 The single node and member 1 share ports, so run only one of them at a time. The scripts write their settings between `BEGIN` and `END` marker lines in each `neo4j.conf`. Re-running a script replaces that block instead of duplicating it.
 
-## Connect from your laptop
+#### Laptop test details
 
-The scripts listen on `127.0.0.1` by default, so no port is open to the network. Use an SSH tunnel. Run this on your laptop for the single node.
+`laptop-test.py` reads its settings from `vm/.env`. It loads that file from its own directory, so the test works from any directory. Variables already set in your shell take precedence over the file.
 
-```bash
-ssh -L 7474:localhost:7474 -L 7687:localhost:7687 ubuntu@$SERVER_IP
-```
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SERVER_IP` | required | Address of the server. |
+| `NEO4J_PW` | prompt | Password for the `neo4j` user. |
+| `LOCAL_BOLT_PORT` | `17687` | Local port for the tunnel. The default does not clash with a Neo4j already running on port `7687` on your laptop. |
+| `SSH_PW` | ssh prompts | SSH password or SSH key passphrase. |
 
-For the cluster, forward the Bolt ports of all three members as well.
+Put a value in single quotes if it has special characters, so it is read exactly as written.
 
-```bash
-ssh -L 7474:localhost:7474 -L 7687:localhost:7687 -L 7697:localhost:7697 -L 7707:localhost:7707 ubuntu@$SERVER_IP
-```
-
-Open `http://localhost:7474` in a browser. Connect with `neo4j://localhost:7687` for the cluster or `bolt://localhost:7687` for the single node. Log in as `neo4j` with the password you chose.
-
-If you listen on `0.0.0.0`, set up a firewall and TLS first. The cluster port `6000` accepts unauthenticated replication traffic unless cluster SSL is configured.
-
-## Test from your laptop
-
-`laptop-test.py` writes test data to Neo4j and reads it back from your laptop. It opens its own SSH tunnel and closes it when it finishes. Run it on your laptop, not on the server. It needs [uv](https://docs.astral.sh/uv/), which installs the Neo4j Python driver on the first run.
-
-Set the server address.
-
-```bash
-export SERVER_IP=<server-ip>
-```
-
-Optionally, set the local port for the tunnel. The default is `17687`, so the test does not clash with a Neo4j already running on port `7687` on your laptop.
-
-```bash
-export LOCAL_BOLT_PORT=17687
-```
-
-Set the password for the `neo4j` user. If `NEO4J_PW` is not set, the script prompts for it.
-
-```bash
-export NEO4J_PW='<your-password>'
-```
-
-If the server uses a password for SSH, or your SSH key has a passphrase, set it. If `SSH_PW` is not set, ssh prompts as usual.
-
-```bash
-export SSH_PW='<ssh-password>'
-```
-
-The script answers only password and passphrase prompts from `SSH_PW`. It does not accept an unknown host key for you. Connect once with plain `ssh` first so the server's host key is saved.
-
-Test the cluster.
-
-```bash
-uv run laptop-test.py
-```
-
-Test the single node.
-
-```bash
-uv run laptop-test.py --target single
-```
+The script answers only password and passphrase prompts from `SSH_PW`. It does not accept an unknown host key for you.
 
 The tunnel maps the local ports to the Bolt ports on the server.
 
@@ -307,7 +335,7 @@ A summary at the end shows the counts, times, servers, and `PASS` or `FAIL`. The
 | `--ssh-key` | none | Private key file passed to `ssh -i`. |
 | `--keep` | off | Keep the test nodes after the run. |
 
-## Operating the services
+#### Operating the services
 
 Check the status of the single node.
 
@@ -329,7 +357,7 @@ journalctl -u neo4j@1 -f
 
 Neo4j also writes `logs/neo4j.log` inside each instance directory.
 
-## Troubleshooting
+#### Troubleshooting
 
 **Ports already in use.** The preflight check names the busy ports. Stop the process that owns them, or run `./install-cluster.sh cleanup` if it is an earlier Neo4j install.
 
@@ -355,11 +383,16 @@ sudo update-java-alternatives --jre --set <java21name>
 
 **The script warns about the architecture.** Neo4j documents support only for x86_64 and ARM64. The warning does not stop the install. If Neo4j fails to start on the machine, the journal shows why.
 
-## Security notes
+#### Security notes
 
+- If you listen on `0.0.0.0`, set up a firewall and TLS first. The cluster port `6000` accepts unauthenticated replication traffic unless cluster SSL is configured.
 - Both scripts pass the password to `neo4j-admin` as a command line argument. It is visible in `ps` for a moment, so use these scripts for test machines.
 - The scripts never write the password to disk. `cypher-shell` receives it through an environment variable.
 - A cluster on one machine shows how clustering behaves but gives no real fault tolerance. If the machine fails, all three members fail.
+
+## OpenShift deployment (planned)
+
+The next test runs Neo4j Enterprise Edition on IBM Z OpenShift with the Neo4j Kubernetes operator.
 
 ## References
 
