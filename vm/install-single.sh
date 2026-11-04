@@ -17,6 +17,7 @@
 #   LISTEN_ADDRESS     127.0.0.1 or 0.0.0.0                (default asks, 127.0.0.1 recommended)
 #   ADVERTISED_ADDRESS Hostname or IP the node advertises  (default localhost)
 #   NEO4J_LICENSE      eval or commercial                  (default asks, eval)
+#   ENABLE_GDS         yes installs Graph Data Science     (default no)
 
 set -Eeuo pipefail
 # With set -E the trap also fires inside $(...) subshells, so report only from the main shell.
@@ -33,6 +34,7 @@ PAGECACHE="${PAGECACHE:-}"
 LISTEN="${LISTEN_ADDRESS:-}"
 ADVERTISED="${ADVERTISED_ADDRESS:-}"
 LICENSE="${NEO4J_LICENSE:-}"
+ENABLE_GDS="${ENABLE_GDS:-no}"
 INSTALL_DIR="${BASE_DIR}/neo4j-single"
 SERVICE="neo4j-single"
 UNIT_FILE="/etc/systemd/system/${SERVICE}.service"
@@ -50,7 +52,7 @@ for arg in "$@"; do
     install | verify | uninstall) ACTION="$arg" ;;
     -y | --yes) YES=1 ;;
     -h | --help)
-      sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -295,6 +297,18 @@ create_instance() {
   chown -R "neo4j:${group}" "$INSTALL_DIR"
 }
 
+install_gds() {
+  [[ $ENABLE_GDS == yes ]] || return 0
+  step "Install the Graph Data Science plugin"
+  explain "Copies the plugin that ships in products/ to plugins/. Neo4j loads it at startup."
+  pause
+  local jar="${INSTALL_DIR}/products/neo4j-graph-data-science-${VERSION}.jar"
+  [[ -f $jar ]] || die "${jar} not found."
+  cp "$jar" "${INSTALL_DIR}/plugins/"
+  chown --reference="${INSTALL_DIR}/plugins" "${INSTALL_DIR}/plugins/$(basename "$jar")"
+  ok "Installed $(basename "$jar")."
+}
+
 write_config() {
   step "Write the configuration"
   explain "Appends a managed block to conf/neo4j.conf. Re-running replaces that block."
@@ -312,6 +326,10 @@ write_config() {
     fi
     if [[ -n $PAGECACHE ]]; then
       echo "server.memory.pagecache.size=${PAGECACHE}"
+    fi
+    if [[ $ENABLE_GDS == yes ]]; then
+      echo "dbms.security.procedures.unrestricted=gds.*"
+      echo "dbms.security.procedures.allowlist=gds.*"
     fi
     echo "$MARK_END"
   } >> "$conf"
@@ -455,6 +473,7 @@ do_install() {
   create_user
   unpack_neo4j
   create_instance
+  install_gds
   write_config
   accept_license
   set_password

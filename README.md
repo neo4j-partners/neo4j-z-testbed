@@ -25,14 +25,15 @@ The testing covers these deployments:
 
 ## Test results
 
-The VM tests passed on IBM Z, including a laptop test against the cluster. The test machine, what passed, and the warnings seen are in [IBMZ-VM-TEST-RESULTS.md](vm/IBMZ-VM-TEST-RESULTS.md).
+The VM tests passed on IBM Z, including a laptop test against the cluster and a Graph Data Science test on the single node. The test machine, what passed, and the warnings seen are in [IBMZ-VM-TEST-RESULTS.md](vm/IBMZ-VM-TEST-RESULTS.md).
 
-One issue is open. A cluster member crashed in the Java VM after a later install. The [crash details](vm/IBMZ-VM-TEST-RESULTS.md#java-vm-crash-on-member-3) are in the same file.
+One issue is open. The Java VM crashed three times, on two cluster members and on the single node. The crash does not appear on every run, and the cause is not confirmed. The [crash details](vm/IBMZ-VM-TEST-RESULTS.md#java-vm-crash) are in the same file.
 
 | Deployment | Setup | Status |
 | --- | --- | --- |
 | VM | Single node | [Passed](vm/IBMZ-VM-TEST-RESULTS.md#single-node-test-results) |
 | VM | Three-member cluster | [Passed](vm/IBMZ-VM-TEST-RESULTS.md#cluster-test-results) |
+| VM | Graph Data Science on the single node | [Passed after one Java VM crash](vm/IBMZ-VM-TEST-RESULTS.md#graph-data-science-test-results) |
 | OpenShift | Neo4j Kubernetes operator | Planned |
 
 ## What is in this repository
@@ -45,9 +46,11 @@ Two interactive scripts install Neo4j Enterprise Edition 2026.09.0 on a single U
 | `vm/install-cluster.sh` | Installs a three-member cluster on one machine. It can also clean up earlier installs. |
 | `vm/cluster.md` | The same cluster setup as manual steps, with one command per code block. |
 | `vm/laptop-test.py` | Runs from your laptop. Writes test data through an SSH tunnel, reads it back, and checks it. |
-| `vm/.env.example` | Sample settings for `laptop-test.py`. Copy it to `vm/.env`. |
+| `vm/gds-test.py` | Runs from your laptop. Checks Graph Data Science results on the single node against answers computed in Python. |
+| `vm/support.py` | SSH tunnel and output code shared by `laptop-test.py` and `gds-test.py`. |
+| `vm/.env.example` | Sample settings for `laptop-test.py` and `gds-test.py`. Copy it to `vm/.env`. |
 | `vm/IBMZ-VM-TEST-RESULTS.md` | Results of the VM tests on IBM Z. |
-| `vm/crash-reports/` | Java crash report and compiler replay data from the member 3 crash. |
+| `vm/crash-reports/` | Java crash reports and compiler replay data from the Java VM crashes. |
 | `vm/sample-output.md` | Full output from the cluster install and the laptop test on IBM Z, with addresses and the password redacted. |
 
 Both scripts install from the Neo4j tarball, not the Debian package. The Debian package supports only one instance per machine, so it cannot host three cluster members.
@@ -136,12 +139,34 @@ uv run vm/laptop-test.py --target single
 
 The [laptop test details](#laptop-test-details) cover the optional settings, the steps, and the options.
 
+#### Test Graph Data Science from your laptop
+
+`gds-test.py` runs Graph Data Science algorithms on the single node and checks each answer. It needs the plugin, so install the node with `ENABLE_GDS=yes`. Run this on the server.
+
+```bash
+ENABLE_GDS=yes ./install-single.sh
+```
+
+Then run the test on your laptop from the root of this repository. It uses the same `vm/.env` as `laptop-test.py`.
+
+```bash
+uv run vm/gds-test.py
+```
+
+To add load, use a generated graph with 100,000 relationships.
+
+```bash
+uv run vm/gds-test.py --rels 100000
+```
+
+The [GDS test details](#gds-test-details) cover the steps and the options.
+
 #### What install-single.sh does
 
 1. Checks the OS, architecture, memory, disk, filesystem, and that the ports are free.
 2. Asks for the listen address and the license type.
 3. Installs Java, creates the `neo4j` user, and unpacks the tarball.
-4. Installs the node into `/opt/neo4j-single` and writes its configuration.
+4. Installs the node into `/opt/neo4j-single`, adds the Graph Data Science plugin if `ENABLE_GDS=yes`, and writes its configuration.
 5. Accepts the license and sets the initial password.
 6. Creates the `neo4j-single` systemd service and starts it.
 7. Shows the version and edition, lists the databases, and runs a write and read test.
@@ -271,6 +296,7 @@ Set these environment variables before the command to skip a prompt or change a 
 | `LISTEN_ADDRESS` | prompt | Use `127.0.0.1` for local only or `0.0.0.0` for all interfaces. |
 | `ADVERTISED_ADDRESS` | `localhost` | Hostname or IP that clients and members use to reach the machine. |
 | `NEO4J_LICENSE` | prompt | Use `eval` for the evaluation agreement or `commercial` for the commercial agreement. |
+| `ENABLE_GDS` | `no` | Use `yes` to install the Graph Data Science plugin on the single node. `install-cluster.sh` ignores it. |
 
 For example, this runs an unattended cluster install.
 
@@ -334,6 +360,33 @@ A summary at the end shows the counts, times, servers, and `PASS` or `FAIL`. The
 | `--ssh-user` | `ubuntu` | SSH user on the server. |
 | `--ssh-key` | none | Private key file passed to `ssh -i`. |
 | `--keep` | off | Keep the test nodes after the run. |
+
+#### GDS test details
+
+`gds-test.py` reads the same `vm/.env` settings as `laptop-test.py` and opens its tunnel the same way. It connects to the single node only. The script computes the expected answers in pure Python on your laptop, then compares them with the GDS results.
+
+Without `--rels`, the script uses a small graph with 8 nodes, 12 relationships, and two separate groups. With `--rels`, it generates a repeatable graph with seed 42 and one node for every five relationships.
+
+The script runs these steps and prints a section for each one.
+
+1. **Settings:** The script shows the server, the URI, and the graph it will use.
+2. **SSH tunnel:** The script opens the tunnel and checks that the local port is free.
+3. **Check GDS:** The script confirms that Neo4j loaded the plugin and shows what GDS reports about the machine.
+4. **Create test data:** The script removes any `:GdsTest` nodes left by an earlier run, then creates the graph.
+5. **Project:** The script estimates the memory for the graph, then loads it into GDS memory.
+6. **WCC:** The script compares every connected group of nodes with the groups computed in Python.
+7. **PageRank:** The script compares every score with the score computed in Python. The largest allowed difference is 1.00e-05.
+8. **Dijkstra:** The script compares the cheapest path and its cost.
+9. **Write back:** The script runs PageRank in write mode, reads the scores from the database, and compares them.
+10. **Clean up:** The script drops the in-memory graph and deletes the test nodes.
+
+A summary at the end shows each check and `PASS` or `FAIL`. The script exits with code 1 on `FAIL` or on any error. If Neo4j stops during a run, the summary shows `FAIL` and the test nodes stay in the database. The next run removes them.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--rels` | none | Use a generated graph with this many relationships. |
+| `--ssh-user` | `ubuntu` | SSH user on the server. |
+| `--ssh-key` | none | Private key file passed to `ssh -i`. |
 
 #### Operating the services
 
