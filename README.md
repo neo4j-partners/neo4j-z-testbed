@@ -1,5 +1,7 @@
 # Neo4j Enterprise on IBM Z: testing and validation
 
+**Goal:** This testing validates the Neo4j EE IntelliGraph bundle that Neo4j is preparing for IBM. The bundle includes Neo4j Enterprise Edition and Graph Data Science. The testing sets a baseline of what works in this package.
+
 This repository tests whether Neo4j Enterprise Edition 2026.09.0 installs and runs on IBM Z. It holds the install scripts, the test tools, and the results, so you can repeat each test on your own machine.
 
 Neo4j documents support only for x86_64 and ARM64 CPUs. IBM Z uses the `s390x` architecture, so it is outside that list. These tests show what works in practice. They are not a statement of support from Neo4j.
@@ -27,7 +29,9 @@ The testing covers these deployments:
 
 The VM tests passed on IBM Z, including a laptop test against the cluster and a Graph Data Science test on the single node. The test machine, what passed, and the warnings seen are in [IBMZ-VM-TEST-RESULTS.md](vm/IBMZ-VM-TEST-RESULTS.md).
 
-One issue is open. The Java VM crashed three times, on two cluster members and on the single node. The crash does not appear on every run, and the cause is not confirmed. The [crash details](vm/IBMZ-VM-TEST-RESULTS.md#java-vm-crash) are in the same file.
+One issue is open. The Java VM crashed three times on Java 21, on two cluster members and on the single node. The crash does not appear on every run, and the cause is not confirmed. The [crash details](vm/IBMZ-VM-TEST-RESULTS.md#java-vm-crash) are in the same file.
+
+The single node also passed these tests on Java 25. That run does not show that Java 25 fixes the crash, as the [Java 25 comparison](vm/IBMZ-VM-TEST-RESULTS.md#java-25-comparison) explains.
 
 | Deployment | Setup | Status |
 | --- | --- | --- |
@@ -45,13 +49,16 @@ Two interactive scripts install Neo4j Enterprise Edition 2026.09.0 on a single U
 | `vm/install-single.sh` | Installs one standalone node. Run it first to check Java, the tarball, licensing, and networking. |
 | `vm/install-cluster.sh` | Installs a three-member cluster on one machine. It can also clean up earlier installs. |
 | `vm/cluster.md` | The same cluster setup as manual steps, with one command per code block. |
-| `vm/laptop-test.py` | Runs from your laptop. Writes test data through an SSH tunnel, reads it back, and checks it. |
-| `vm/gds-test.py` | Runs from your laptop. Checks Graph Data Science results on the single node against answers computed in Python. |
-| `vm/support.py` | SSH tunnel and output code shared by `laptop-test.py` and `gds-test.py`. |
-| `vm/.env.example` | Sample settings for `laptop-test.py` and `gds-test.py`. Copy it to `vm/.env`. |
+| `tests/laptop-test.py` | Runs from your laptop. Writes test data, reads it back, and checks it, on the VM or on OpenShift. |
+| `tests/gds-test.py` | Runs from your laptop. Checks Graph Data Science results on the VM single node against answers computed in Python. |
+| `tests/access.py` | Opens the way from your laptop to Neo4j: an SSH tunnel for the VM, or `oc` port forwards for OpenShift. |
+| `tests/support.py` | Output, settings, and error handling shared by the test scripts. |
+| `tests/.env.example` | Sample settings for the test scripts. Copy it to `tests/.env`. |
 | `vm/IBMZ-VM-TEST-RESULTS.md` | Results of the VM tests on IBM Z. |
 | `vm/crash-reports/` | Java crash reports and compiler replay data from the Java VM crashes. |
 | `vm/sample-output.md` | Full output from the cluster install and the laptop test on IBM Z, with addresses and the password redacted. |
+| `openshift/coding-agent-guide.md` | Instructions for a coding agent to build and run the OpenShift tests. |
+| `openshift/IBMZ-OPENSHIFT-TEST-RESULTS.md` | Template for the OpenShift test results on IBM Z. |
 
 Both scripts install from the Neo4j tarball, not the Debian package. The Debian package supports only one instance per machine, so it cannot host three cluster members.
 
@@ -123,18 +130,18 @@ If you listen on `0.0.0.0`, read the [security notes](#security-notes) first.
 
 Connect once with plain `ssh` first so the server's host key is saved.
 
-Copy the sample settings file. The `-n` flag keeps any `vm/.env` you already have.
+Copy the sample settings file. The `-n` flag keeps any `tests/.env` you already have.
 
 ```bash
-cp -n vm/.env.example vm/.env
+cp -n tests/.env.example tests/.env
 ```
 
-Set `SERVER_IP` and `NEO4J_PW` in `vm/.env`. Git ignores this file.
+Set `SERVER_IP` and `NEO4J_PW` in `tests/.env`. Git ignores this file.
 
 Run the test.
 
 ```bash
-uv run vm/laptop-test.py --target single
+uv run tests/laptop-test.py --target single
 ```
 
 The [laptop test details](#laptop-test-details) cover the optional settings, the steps, and the options.
@@ -147,16 +154,16 @@ The [laptop test details](#laptop-test-details) cover the optional settings, the
 ENABLE_GDS=yes ./install-single.sh
 ```
 
-Then run the test on your laptop from the root of this repository. It uses the same `vm/.env` as `laptop-test.py`.
+Then run the test on your laptop from the root of this repository. It uses the same `tests/.env` as `laptop-test.py`.
 
 ```bash
-uv run vm/gds-test.py
+uv run tests/gds-test.py
 ```
 
 To add load, use a generated graph with 100,000 relationships.
 
 ```bash
-uv run vm/gds-test.py --rels 100000
+uv run tests/gds-test.py --rels 100000
 ```
 
 The [GDS test details](#gds-test-details) cover the steps and the options.
@@ -209,18 +216,18 @@ If you listen on `0.0.0.0`, read the [security notes](#security-notes) first.
 
 Connect once with plain `ssh` first so the server's host key is saved.
 
-Copy the sample settings file. The `-n` flag keeps any `vm/.env` you already have.
+Copy the sample settings file. The `-n` flag keeps any `tests/.env` you already have.
 
 ```bash
-cp -n vm/.env.example vm/.env
+cp -n tests/.env.example tests/.env
 ```
 
-Set `SERVER_IP` and `NEO4J_PW` in `vm/.env`. Git ignores this file.
+Set `SERVER_IP` and `NEO4J_PW` in `tests/.env`. Git ignores this file.
 
 Run the test.
 
 ```bash
-uv run vm/laptop-test.py
+uv run tests/laptop-test.py
 ```
 
 The [laptop test details](#laptop-test-details) cover the optional settings, the steps, and the options.
@@ -317,14 +324,16 @@ The single node and member 1 share ports, so run only one of them at a time. The
 
 #### Laptop test details
 
-`laptop-test.py` reads its settings from `vm/.env`. It loads that file from its own directory, so the test works from any directory. Variables already set in your shell take precedence over the file.
+`laptop-test.py` reads its settings from `tests/.env`. It loads that file from its own directory, so the test works from any directory. Variables already set in your shell take precedence over the file.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `SERVER_IP` | required | Address of the server. |
+| `SERVER_IP` | required for `--via ssh` | Address of the server. |
 | `NEO4J_PW` | prompt | Password for the `neo4j` user. |
-| `LOCAL_BOLT_PORT` | `17687` | Local port for the tunnel. The default does not clash with a Neo4j already running on port `7687` on your laptop. |
+| `LOCAL_BOLT_PORT` | `17687` | Local port for the first member. The default does not clash with a Neo4j already running on port `7687` on your laptop. |
 | `SSH_PW` | ssh prompts | SSH password or SSH key passphrase. |
+| `OC_NAMESPACE` | required for `--via oc` | Namespace of the Neo4j pods. |
+| `OC_POD_SELECTOR` | required for `--via oc` | Label selector for the Neo4j pods, such as `app=neo4j`. |
 
 Put a value in single quotes if it has special characters, so it is read exactly as written.
 
@@ -339,22 +348,29 @@ The tunnel maps the local ports to the Bolt ports on the server.
 | Cluster member 2 | `LOCAL_BOLT_PORT` + 10 | 7697 |
 | Cluster member 3 | `LOCAL_BOLT_PORT` + 20 | 7707 |
 
+With `--via oc`, the script runs one `oc port-forward` for each running pod that matches `OC_POD_SELECTOR`. You must be logged in with `oc` first. The first pod uses `LOCAL_BOLT_PORT`, and each further pod uses 10 more than the last. The port forward path has run only against a stand-in for `oc`, not against a real cluster.
+
+```bash
+uv run tests/laptop-test.py --via oc
+```
+
 The script runs these steps and prints a section for each one.
 
-1. **Settings:** The script shows the server, target, URI, and port mapping.
-2. **SSH tunnel:** The script opens the tunnel and checks that the local ports are free.
+1. **Settings:** The script shows the platform, target, and row counts.
+2. **Connection to Neo4j:** The script checks that the local ports are free and opens the tunnel or port forwards.
 3. **Connect:** The script connects the driver and shows the Neo4j version and edition. It also shows the full `SHOW SERVERS` output: each server's ID, address, state, health, and the databases it hosts.
-4. **Topology:** The script shows where the `neo4j` database runs and which member accepts writes.
+4. **Topology:** The script shows where the `neo4j` and `system` databases run and which member accepts writes for each.
 5. **Write:** The script creates 100 `:LaptopTest` nodes in batches of 25. It shows a few sample rows with long text cut short, then the time and server for each batch.
 6. **Read:** The script reads the nodes back and shows sample rows. It also shows which server answered the read.
 7. **Verify:** The script compares every row read with the row written. It counts the rows that match, differ, or are missing.
 8. **Clean up:** The script deletes the test nodes.
 
-A summary at the end shows the counts, times, servers, and `PASS` or `FAIL`. The script exits with code 1 on `FAIL` or on any error.
+A summary at the end shows the counts, times, servers, and a `PASS` or `FAIL` for each check. The checks cover the Enterprise edition, all servers enabled and available, each database online on every member with one writer, and every row matching. The script exits with code 1 on `FAIL` or on any error.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--target` | `cluster` | Use `cluster` or `single`. |
+| `--via` | `ssh` | Use `ssh` for the VM or `oc` for OpenShift. |
+| `--target` | `cluster` | Use `cluster` or `single`. This applies to `--via ssh` only. |
 | `--rows` | `100` | Number of rows to write. |
 | `--batch-size` | `25` | Rows per write transaction. |
 | `--ssh-user` | `ubuntu` | SSH user on the server. |
@@ -363,13 +379,13 @@ A summary at the end shows the counts, times, servers, and `PASS` or `FAIL`. The
 
 #### GDS test details
 
-`gds-test.py` reads the same `vm/.env` settings as `laptop-test.py` and opens its tunnel the same way. It connects to the single node only. The script computes the expected answers in pure Python on your laptop, then compares them with the GDS results.
+`gds-test.py` reads the same `tests/.env` settings as `laptop-test.py` and opens its tunnel the same way. It connects to the single node only. The script computes the expected answers in pure Python on your laptop, then compares them with the GDS results.
 
 Without `--rels`, the script uses a small graph with 8 nodes, 12 relationships, and two separate groups. With `--rels`, it generates a repeatable graph with seed 42 and one node for every five relationships.
 
 The script runs these steps and prints a section for each one.
 
-1. **Settings:** The script shows the server, the URI, and the graph it will use.
+1. **Settings:** The script shows the graph it will use.
 2. **SSH tunnel:** The script opens the tunnel and checks that the local port is free.
 3. **Check GDS:** The script confirms that Neo4j loaded the plugin and shows what GDS reports about the machine.
 4. **Create test data:** The script removes any `:GdsTest` nodes left by an earlier run, then creates the graph.

@@ -3,50 +3,67 @@
 # requires-python = ">=3.10"
 # dependencies = ["neo4j>=5.28", "python-dotenv>=1.0"]
 # ///
-"""Write and read test data in Neo4j from your laptop through an SSH tunnel.
+"""Write and read test data in Neo4j from your laptop.
 
-Run it on your laptop, not on the server:
+Run it on your laptop from the root of this repository, not on the server:
 
-    cp -n .env.example .env              # then set the values in .env
-    uv run laptop-test.py                # cluster, neo4j://localhost:17687
-    uv run laptop-test.py --target single
+    cp -n tests/.env.example tests/.env   # then set the values in tests/.env
+    uv run tests/laptop-test.py           # VM cluster through an SSH tunnel
+    uv run tests/laptop-test.py --target single
+    uv run tests/laptop-test.py --via oc  # OpenShift through port forwards
 
 The script loads .env from its own directory. Variables already set in your
 shell take precedence over the file.
 
-The script opens the SSH tunnel itself and closes it when it finishes.
-LOCAL_BOLT_PORT is the laptop end of the tunnel for the server's port 7687.
-The cluster also uses LOCAL_BOLT_PORT + 10 and + 20 for members 2 and 3.
+The script opens the tunnel or port forwards itself and closes them when it
+finishes. LOCAL_BOLT_PORT is the laptop port for the first member. Each further
+member uses 10 more than the last.
 """
 
 import argparse
 import functools
-import getpass
-import os
 import random
 import sys
 import time
 import uuid
 from datetime import datetime, timezone
 
-from dotenv import load_dotenv
-from neo4j import Address, Driver, GraphDatabase, Session
-from neo4j.exceptions import AuthError, Neo4jError, ServiceUnavailable
+from neo4j import Driver, GraphDatabase, Session
 
 import support
-from support import ENV_FILE, kv, ms, ssh_tunnel
+from access import Access, oc_access, ssh_access
+from support import Check, kv, ms, neo4j_password, run_guarded, show_checks
 
-BOLT_PORTS = {"single": [7687], "cluster": [7687, 7697, 7707]}
-DEFAULT_LOCAL_BOLT_PORT = 17687
-URI_SCHEME = {"single": "bolt", "cluster": "neo4j"}
 LABEL = "LaptopTest"
 DATABASE = "neo4j"
+DATABASES = (DATABASE, "system")
 TOTAL_STEPS = 8
 SNIPPET_ROWS = 3
-WORDS = (
-    "graph node edge cluster raft leader follower bolt cypher index page cache "
-    "heap replica primary routing bookmark commit write read shard store query"
-).split()
+WORDS = [
+    "graph",
+    "node",
+    "edge",
+    "cluster",
+    "raft",
+    "leader",
+    "follower",
+    "bolt",
+    "cypher",
+    "index",
+    "page",
+    "cache",
+    "heap",
+    "replica",
+    "primary",
+    "routing",
+    "bookmark",
+    "commit",
+    "write",
+    "read",
+    "shard",
+    "store",
+    "query",
+]
 section = functools.partial(support.section, total=TOTAL_STEPS)
 
 
@@ -75,20 +92,6 @@ def show_snippets(rows: list[dict]) -> None:
         print(f"  ... {len(rows) - SNIPPET_ROWS} more rows")
 
 
-def tunnel_resolver(port_map: dict[int, int]):
-    """Send the cluster's member addresses to the local ends of the tunnel.
-
-    The cluster tells the driver to reach its members at localhost:7687,
-    7697, and 7707. Those are server ports, so map each one to its local port.
-    """
-
-    def resolve(address: Address) -> list[Address]:
-        local = port_map.get(address.port)
-        return [Address(("localhost", local))] if local else [address]
-
-    return resolve
-
-
 # ---------------------------------------------------------------------------
 # Test steps
 # ---------------------------------------------------------------------------
@@ -113,7 +116,7 @@ def make_rows(run_id: str, count: int) -> list[dict]:
     return rows
 
 
-def show_connection(driver: Driver) -> None:
+def show_connection(driver: Driver, members: int) -> list[Check]:
     info = driver.get_server_info()
     kv("Connected to", info.address)
     kv("Server agent", info.agent)
@@ -125,6 +128,12 @@ def show_connection(driver: Driver) -> None:
     )
     for rec in records:
         kv("Neo4j", f"{rec['name']} {rec['version']} {rec['edition']}")
+    kernel = next(rec for rec in records if rec["name"] == "Neo4j Kernel")
+    edition = Check(
+        "Version and edition",
+        kernel["edition"] == "enterprise",
+        f"{kernel['version']} {kernel['edition']}",
+    )
 
     records, _, _ = driver.execute_query("SHOW SERVERS", database_="system")
     print()
@@ -135,19 +144,27 @@ def show_connection(driver: Driver) -> None:
             if isinstance(value, list):
                 value = ", ".join(map(str, value))
             print(f"      {key:<10} {value}")
-    available = sum(rec["health"] == "Available" for rec in records)
+    available = sum(
+        rec["state"] == "Enabled" and rec["health"] == "Available" for rec in records
+    )
     print()
     kv("Available servers", f"{available} of {len(records)}")
+    servers = Check(
+        "Servers",
+        available == members == len(records),
+        f"{available} of {members} enabled and available",
+    )
+    return [edition, servers]
 
 
-def show_topology(driver: Driver) -> None:
+def show_database(driver: Driver, database: str, members: int) -> bool:
     records, _, _ = driver.execute_query(
         "SHOW DATABASE $db "
         "YIELD serverID, address, role, writer, currentStatus, statusMessage",
-        {"db": DATABASE},
+        {"db": database},
         database_="system",
     )
-    print(f"  Database '{DATABASE}':")
+    print(f"  Database '{database}':")
     online = 0
     for rec in records:
         # A member that is down has no address and may have no role.
@@ -159,14 +176,28 @@ def show_topology(driver: Driver) -> None:
         else:
             marker = "  <- DOWN"
         print(
-            f"    {address:<18} role={role:<10} "
-            f"status={rec['currentStatus']}{marker}"
+            f"    {address:<18} role={role:<10} status={rec['currentStatus']}{marker}"
         )
         if rec["currentStatus"] != "online":
             print(f"      server     {rec['serverID']}")
             print(f"      message    {rec['statusMessage'] or '-'}")
+    writers = sum(bool(rec["writer"]) for rec in records)
     print()
     kv("Members online", f"{online} of {len(records)}")
+    kv("Writers", writers)
+    print()
+    return online == members == len(records) and writers == 1
+
+
+def show_topology(driver: Driver, members: int) -> Check:
+    healthy = [
+        database for database in DATABASES if show_database(driver, database, members)
+    ]
+    return Check(
+        "Databases",
+        len(healthy) == len(DATABASES),
+        f"{len(healthy)} of {len(DATABASES)} online with one writer",
+    )
 
 
 def write_rows(session: Session, rows: list[dict], batch_size: int) -> tuple:
@@ -230,13 +261,19 @@ def delete_rows(driver: Driver, run_id: str) -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Write and read test data in Neo4j through an SSH tunnel."
+        description="Write and read test data in Neo4j from your laptop."
+    )
+    parser.add_argument(
+        "--via",
+        choices=["ssh", "oc"],
+        default="ssh",
+        help="How to reach Neo4j: ssh for the VM, oc for OpenShift (default: ssh).",
     )
     parser.add_argument(
         "--target",
         choices=["cluster", "single"],
         default="cluster",
-        help="Install to test (default: cluster).",
+        help="Install to test with --via ssh (default: cluster).",
     )
     parser.add_argument(
         "--rows", type=int, default=100, help="Rows to write (default: 100)."
@@ -254,31 +291,28 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run_test(
-    args: argparse.Namespace, uri: str, password: str, port_map: dict[int, int]
-) -> bool:
+def run_test(args: argparse.Namespace, access: Access, password: str) -> bool:
     run_id = f"run-{uuid.uuid4().hex[:8]}"
-    resolver = tunnel_resolver(port_map) if args.target == "cluster" else None
 
     with GraphDatabase.driver(
-        uri, auth=("neo4j", password), resolver=resolver
+        access.uri, auth=("neo4j", password), resolver=access.resolver
     ) as driver:
         section(
             3,
             "Connect",
-            f"Connects the Neo4j Python driver to {uri}, reads the server "
-            "version, and lists the servers with SHOW SERVERS.",
+            f"Connects the Neo4j Python driver to {access.uri}, reads the "
+            "server version, and lists the servers with SHOW SERVERS.",
         )
         driver.verify_connectivity()
-        show_connection(driver)
+        checks = show_connection(driver, access.members)
 
         section(
             4,
             "Topology",
-            f"Shows where the '{DATABASE}' database runs. The writer is the "
-            "member that accepts writes.",
+            "Shows where each database runs. The writer is the member that "
+            "accepts writes for that database.",
         )
-        show_topology(driver)
+        checks.append(show_topology(driver, access.members))
 
         rows = make_rows(run_id, args.rows)
         written = read = []
@@ -327,8 +361,7 @@ def run_test(
             section(
                 7,
                 "Verify",
-                "Compares each row read back with the row written, field by "
-                "field.",
+                "Compares each row read back with the row written, field by field.",
             )
             matched, different, missing = compare(written, read)
             kv("Rows matched", f"{matched} of {len(written)}")
@@ -347,8 +380,16 @@ def run_test(
                 deleted = delete_rows(driver, run_id)
                 kv("Nodes deleted", deleted)
 
-    passed = len(written) == args.rows and matched == args.rows
-    section(None, "Summary", f"Results for {run_id} on {uri}.")
+    checks.append(
+        Check(
+            "Rows",
+            len(written) == args.rows and matched == args.rows,
+            f"{matched} of {args.rows} matched",
+        )
+    )
+    passed = all(check.passed for check in checks)
+    section(None, "Summary", f"Results for {run_id} on {access.uri}.")
+    kv("Platform", args.via)
     kv("Target", args.target)
     kv("Rows written", len(written))
     kv("Rows read", len(read))
@@ -361,74 +402,41 @@ def run_test(
     kv("Writes served by", ", ".join(sorted(write_servers)))
     kv("Read served by", read_server)
     print()
+    show_checks(checks)
+    print()
     kv("Result", "PASS" if passed else "FAIL")
     return passed
 
 
-def main() -> int:
-    args = parse_args()
-    load_dotenv(ENV_FILE)
-    server = os.environ.get("SERVER_IP")
-    if not server:
-        print(f"Set SERVER_IP in {ENV_FILE}. See .env.example.")
-        return 1
-
-    try:
-        base = int(os.environ.get("LOCAL_BOLT_PORT", DEFAULT_LOCAL_BOLT_PORT))
-    except ValueError:
-        print("LOCAL_BOLT_PORT must be a port number, for example 17687.")
-        return 1
-    remote_ports = BOLT_PORTS[args.target]
-    port_map = {remote: remote - 7687 + base for remote in remote_ports}
-    clash = set(port_map.values()) & set(remote_ports)
-    if base != 7687 and clash:
-        print(
-            f"LOCAL_BOLT_PORT={base} would reuse server port(s) "
-            f"{sorted(clash)} for a different member. Pick another port."
+def run(args: argparse.Namespace) -> bool:
+    if args.via == "oc" and args.target == "single":
+        raise RuntimeError(
+            "--via oc tests a cluster, so it cannot use --target single."
         )
-        return 1
-    uri = f"{URI_SCHEME[args.target]}://localhost:{base}"
 
     section(1, "Settings", "The values this run uses.")
-    kv("Server", f"{args.ssh_user}@{server}")
+    kv("Platform", args.via)
     kv("Target", args.target)
-    kv("URI", uri)
-    kv(
-        "Forwarded ports",
-        ", ".join(f"{local} -> {remote}" for remote, local in port_map.items()),
-    )
     kv("Rows / batch size", f"{args.rows} / {args.batch_size}")
     kv("Keep data", "yes" if args.keep else "no")
-    kv(
-        "SSH password",
-        "from SSH_PW" if os.environ.get("SSH_PW") else "ssh prompts if needed",
-    )
-    password = os.environ.get("NEO4J_PW") or getpass.getpass(
-        "  Password for neo4j: "
-    )
+    password = neo4j_password()
 
     section(
         2,
-        "SSH tunnel",
-        "Forwards local ports on this laptop to the Bolt ports on the server. "
-        "The server listens on 127.0.0.1 only, so the tunnel is the way in.",
+        "Connection to Neo4j",
+        "Forwards local ports on this laptop to the Bolt port of each member. "
+        "The members are not open to the laptop, so this is the way in.",
     )
-    try:
-        with ssh_tunnel(server, args.ssh_user, args.ssh_key, port_map):
-            passed = run_test(args, uri, password, port_map)
-    except AuthError as err:
-        print(f"\nLogin failed: {err.message}")
-        return 1
-    except ServiceUnavailable as err:
-        print(f"\nCannot reach Neo4j through the tunnel: {err}")
-        return 1
-    except Neo4jError as err:
-        print(f"\nNeo4j error {err.code}: {err.message}")
-        return 1
-    except RuntimeError as err:
-        print(f"\n{err}")
-        return 1
-    return 0 if passed else 1
+    if args.via == "oc":
+        with oc_access() as access:
+            return run_test(args, access, password)
+    with ssh_access(args.target, args.ssh_user, args.ssh_key) as access:
+        return run_test(args, access, password)
+
+
+def main() -> int:
+    args = parse_args()
+    return run_guarded(lambda: run(args))
 
 
 if __name__ == "__main__":

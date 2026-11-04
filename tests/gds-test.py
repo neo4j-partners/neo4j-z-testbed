@@ -5,11 +5,11 @@
 # ///
 """Check Graph Data Science results on a single Neo4j node from your laptop.
 
-Run it on your laptop, not on the server. The node must be installed with
-ENABLE_GDS=yes:
+Run it on your laptop from the root of this repository, not on the server. The
+node must be installed with ENABLE_GDS=yes:
 
-    uv run gds-test.py                   # small graph with known answers
-    uv run gds-test.py --rels 100000     # generated graph, for load
+    uv run tests/gds-test.py                 # small graph with known answers
+    uv run tests/gds-test.py --rels 100000   # generated graph, for load
 
 The script loads .env from its own directory and opens its own SSH tunnel.
 
@@ -19,9 +19,7 @@ a wrong answer, even if every query ran without an error.
 """
 
 import argparse
-import getpass
 import heapq
-import os
 import random
 import sys
 import time
@@ -29,17 +27,14 @@ import uuid
 from collections import defaultdict
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from typing import NamedTuple
 
-from dotenv import load_dotenv
 from neo4j import Driver, GraphDatabase
-from neo4j.exceptions import AuthError, Neo4jError, ServiceUnavailable
+from neo4j.exceptions import ServiceUnavailable
 
 import support
-from support import ENV_FILE, kv, ms, ssh_tunnel
+from access import ssh_access
+from support import Check, kv, ms, neo4j_password, run_guarded, show_checks
 
-BOLT_PORT = 7687
-DEFAULT_LOCAL_BOLT_PORT = 17687
 DATABASE = "neo4j"
 LABEL = "GdsTest"
 REL_TYPE = "GDS_TEST_LINK"
@@ -95,12 +90,6 @@ Rel = tuple[int, int, float]
 
 def section(step: int | None, title: str, what: str) -> None:
     support.section(step, title, what, total=TOTAL_STEPS)
-
-
-class Check(NamedTuple):
-    name: str
-    passed: bool
-    detail: str
 
 
 @dataclass(frozen=True)
@@ -559,10 +548,7 @@ def run_test(uri: str, password: str, dataset: Dataset) -> bool:
     kv("Nodes", dataset.node_count)
     kv("Relationships", len(dataset.rels))
     print()
-    for check in checks:
-        print(
-            f"  {'PASS' if check.passed else 'FAIL'}  {check.name:<12} {check.detail}"
-        )
+    show_checks(checks)
     print()
     kv("Result", "PASS" if passed else "FAIL")
     return passed
@@ -585,50 +571,25 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
-    args = parse_args()
-    load_dotenv(ENV_FILE)
-    server = os.environ.get("SERVER_IP")
-    if not server:
-        print(f"Set SERVER_IP in {ENV_FILE}. See .env.example.")
-        return 1
-
-    try:
-        local_port = int(os.environ.get("LOCAL_BOLT_PORT", DEFAULT_LOCAL_BOLT_PORT))
-    except ValueError:
-        print("LOCAL_BOLT_PORT must be a port number, for example 17687.")
-        return 1
-    uri = f"bolt://localhost:{local_port}"
+def run(args: argparse.Namespace) -> bool:
     dataset = generated_dataset(args.rels) if args.rels else small_dataset()
 
     section(1, "Settings", "The values this run uses.")
-    kv("Server", f"{args.ssh_user}@{server}")
-    kv("URI", uri)
-    kv("Forwarded port", f"{local_port} -> {BOLT_PORT}")
     kv("Graph", dataset.description)
-    password = os.environ.get("NEO4J_PW") or getpass.getpass("  Password for neo4j: ")
+    password = neo4j_password()
 
     section(
         2,
         "SSH tunnel",
         "Forwards a local port on this laptop to the Bolt port on the server.",
     )
-    try:
-        with ssh_tunnel(server, args.ssh_user, args.ssh_key, {BOLT_PORT: local_port}):
-            passed = run_test(uri, password, dataset)
-    except AuthError as err:
-        print(f"\nLogin failed: {err.message}")
-        return 1
-    except ServiceUnavailable as err:
-        print(f"\nCannot reach Neo4j through the tunnel: {err}")
-        return 1
-    except Neo4jError as err:
-        print(f"\nNeo4j error {err.code}: {err.message}")
-        return 1
-    except RuntimeError as err:
-        print(f"\n{err}")
-        return 1
-    return 0 if passed else 1
+    with ssh_access("single", args.ssh_user, args.ssh_key) as access:
+        return run_test(access.uri, password, dataset)
+
+
+def main() -> int:
+    args = parse_args()
+    return run_guarded(lambda: run(args))
 
 
 if __name__ == "__main__":

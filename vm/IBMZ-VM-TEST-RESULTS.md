@@ -1,5 +1,7 @@
 # Neo4j Enterprise on an IBM Z VM: test results
 
+**Goal:** This testing validates the Neo4j EE IntelliGraph bundle that Neo4j is preparing for IBM. The bundle includes Neo4j Enterprise Edition and Graph Data Science. The testing sets a baseline of what works in this package.
+
 These are the results of running Neo4j Enterprise Edition 2026.09.0 on an Ubuntu VM on IBM Z. The steps to repeat the tests are in the [README](../README.md).
 
 | Test | Result |
@@ -122,3 +124,19 @@ The Java VM crashed three times on 2026-11-04, within about 42 minutes. It crash
 - **Known bugs:** A web search found no published JDK bug with this signature.
 - **Recovery:** Member 3 and the single node started again after a manual `systemctl start`. On the single node, the `Restart=on-abnormal` setting did not restart the service after the crash.
 - **Evidence:** The Java crash reports and compiler replay data are in [crash-reports](crash-reports/).
+
+### Java 25 comparison
+
+The same test loop ran on Java 21 and on Java 25 on the single node, with GDS installed. Each round restarted Neo4j, then ran `gds-test.py`, `gds-test.py --rels 100000`, and `laptop-test.py --target single`.
+
+| | OpenJDK 21.0.12 | OpenJDK 25.0.4.1 |
+| --- | --- | --- |
+| Rounds | 5 | 10 |
+| Rounds with all three tests passing | 5 | 10 |
+| New crash reports | 0 | 0 |
+| Median WCC time, generated graph | 7,521 ms | 6,545 ms |
+| Median PageRank time, generated graph | 10,334 ms | 10,512 ms |
+
+- **Java 25:** Neo4j and GDS ran correctly on Java 25 on IBM Z, and the timing was about the same as Java 21.
+- **Crash fix:** This loop does not show that Java 25 fixes the crash. The loop did not reproduce the crash on Java 21 either, so a clean run on Java 25 is weak evidence.
+- **Compiler replay:** The three crashing compiles were replayed on Java 21, twice each, and none crashed. The classes that Neo4j generates at runtime were missing, and the output does not confirm that the compiles finished. This is a weak hint that the crash is not simply deterministic.

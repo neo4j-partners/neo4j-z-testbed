@@ -1,5 +1,7 @@
 # Neo4j Enterprise Edition cluster on a single Ubuntu machine
 
+**Goal:** This testing validates the Neo4j EE IntelliGraph bundle that Neo4j is preparing for IBM. The bundle includes Neo4j Enterprise Edition and Graph Data Science. The testing sets a baseline of what works in this package.
+
 This guide builds a three-member Neo4j 2026.09.0 Enterprise cluster on one remote Ubuntu server. Each member is a separate Neo4j instance with its own directory, ports, and systemd service.
 
 The Debian package from the [Linux installation docs](https://neo4j.com/docs/operations-manual/current/installation/linux/) installs one instance with fixed paths and one service. A three-member cluster on one host therefore uses the [tarball install](https://neo4j.com/docs/operations-manual/current/installation/linux/tarball/) three times. The cluster settings come from [Deploy a basic cluster](https://neo4j.com/docs/operations-manual/current/clustering/setup/deploy/).
