@@ -10,6 +10,8 @@ These are the results of running Neo4j Enterprise Edition 2026.09.0 on an Ubuntu
 | [Three-member cluster](#cluster-test-results) | Passed |
 | [Laptop test against the cluster](#laptop-test-results) | Passed |
 | [Graph Data Science on the single node](#graph-data-science-test-results) | Passed after one Java VM crash |
+| [Three-member cluster soak on Java 25](#java-25-cluster-soak) | Passed, 48 of 48 rounds |
+| [Three-member cluster soak on Java 21](#java-21-cluster-soak) | Passed, 48 of 48 rounds |
 | [Java VM crash](#java-vm-crash) | Open |
 
 ## Single node test results
@@ -140,3 +142,51 @@ The same test loop ran on Java 21 and on Java 25 on the single node, with GDS in
 - **Java 25:** Neo4j and GDS ran correctly on Java 25 on IBM Z, and the timing was about the same as Java 21.
 - **Crash fix:** This loop does not show that Java 25 fixes the crash. The loop did not reproduce the crash on Java 21 either, so a clean run on Java 25 is weak evidence.
 - **Compiler replay:** The three crashing compiles were replayed on Java 21, twice each, and none crashed. The classes that Neo4j generates at runtime were missing, and the output does not confirm that the compiles finished. This is a weak hint that the crash is not simply deterministic.
+
+### Java 25 cluster soak
+
+The three-member cluster ran on OpenJDK 25.0.4.1 through a 12-hour soak on 2026-11-04 and did not crash. The soak ran from 06:22 to 18:07 UTC. The log is in [soak-java25-cluster.log](soak-java25-cluster.log).
+
+| Check | Result |
+| --- | --- |
+| Rounds passed | 48 of 48 |
+| Rows matched in each round | 100 of 100 |
+| New crash reports | 0 |
+| Member restarts | 0 |
+| Out-of-memory kills | 0 |
+| Median write time for 100 rows | 98 ms |
+| Median read time for 100 rows | 27 ms |
+| Lowest memory available | 399 MB |
+
+- **Setup:** Each member ran with a 512 MB heap and a 128 MB page cache, as in the Java 21 cluster test. GDS was not installed.
+- **Load:** Each round ran `laptop-test.py` once, 15 minutes apart. The rounds ran on the VM itself, with no SSH tunnel, so these times do not compare with the laptop test times. An earlier soak from the laptop passed 2 rounds and was stopped because the VPN kept dropping.
+- **Uptime:** Members 1 and 3 started at 05:36 UTC and member 2 started at 05:38 UTC. All three kept the same process through the soak and were still running at 21:47 UTC, about 16 hours after they started.
+- **Routing:** All 48 writes went to the writer, member 1. Reads went to members 2 and 3, 24 times each.
+- **Memory:** Available memory ranged from 399 MB to 518 MB, with no steady fall toward zero.
+- **Crash fix:** This is stronger evidence than the loop test, because the Java 21 cluster members crashed within about 6 and 29 minutes of starting. It does not prove that Java 25 fixes the crash. The [Java 21 cluster soak](#java-21-cluster-soak) also ran clean, so the soak does not reproduce the crash.
+- **Limits:** The load was light. The crash happens during compilation, and compile work is highest soon after a start, so most of the 12 hours exercised little of the code at risk. The soak also did not restart the members or run GDS.
+
+### Java 21 cluster soak
+
+The same soak ran on OpenJDK 21.0.12.1 as a control for the Java 25 soak. It ran from 22:00 UTC on 2026-11-04 to 09:45 UTC on 2026-11-05 and did not crash. The log is in [soak-java21-cluster.log](soak-java21-cluster.log).
+
+| Check | OpenJDK 21.0.12.1 | OpenJDK 25.0.4.1 |
+| --- | --- | --- |
+| Rounds passed | 48 of 48 | 48 of 48 |
+| Rows matched in each round | 100 of 100 | 100 of 100 |
+| New crash reports | 0 | 0 |
+| Member restarts | 0 | 0 |
+| Out-of-memory kills | 0 | 0 |
+| Median write time for 100 rows | 109 ms | 98 ms |
+| Median read time for 100 rows | 31 ms | 27 ms |
+| Lowest memory available | 445 MB | 399 MB |
+| Time from member start to first round | About 1 minute | About 46 minutes |
+
+- **Setup:** Each member ran with a 512 MB heap and a 128 MB page cache, the same as the Java 25 soak. GDS was not installed.
+- **Uptime:** All three members started at 21:59 UTC on 2026-11-04. They kept the same process through the soak and were still running at 13:44 UTC on 2026-11-06, about 40 hours after they started.
+- **Routing:** All 48 writes went to the writer, member 3. Reads went to member 1 22 times and to member 2 26 times.
+- **Read times:** Three reads were much slower than the rest, at 507 ms, 738 ms, and 1,509 ms. The checks still passed in those rounds.
+- **Memory:** Available memory fell from 653 MB at the start to about 470 MB by round 10. It then held between 445 MB and 505 MB for the rest of the soak.
+- **Early window:** The first round ran about 1 minute after the members started. The soak covered the first 29 minutes of uptime, when the Java 21 cluster members crashed before.
+- **Crash fix:** The soak does not reproduce the crash on Java 21. A clean Java 25 soak therefore says nothing about whether Java 25 fixes the crash. The crash stays open.
+- **Java default:** The VM default Java stays on Java 21 after this soak.
